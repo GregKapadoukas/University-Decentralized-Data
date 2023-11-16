@@ -1,8 +1,19 @@
+# %%
 import multiprocessing
 import socket
 import time
 
+import pandas as pd
+
 from node.node import Node
+
+df = pd.read_csv("dataset/list_of_computer_scientists.csv")
+data = {}
+for institution, df_group in df.groupby(["Institution"]):
+    people = []
+    for row_index, row in df_group.iterrows():
+        people.append([row["Name"], row["Awards"]])
+    data[institution[0]] = people
 
 num_nodes = 2
 processes = []
@@ -11,8 +22,9 @@ for i in range(num_nodes):
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()
 
-
 # Placeholder from now on
+# print(data)
+
 # Info for node1
 node1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 node1_ip = "127.0.0.1"
