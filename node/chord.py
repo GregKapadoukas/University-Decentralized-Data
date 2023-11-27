@@ -1,4 +1,3 @@
-import hashlib
 import pickle
 import socket
 
@@ -11,12 +10,18 @@ class FingerNodeInfo:
         self.host = host
         self.port = port
 
+    def __str__(self):
+        return f"id: {self.id}, host {self.host}, port {self.port}"
+
 
 class FingerEntry:
     def __init__(self, start, interval, id, host, port):
         self.start = start
         self.interval = interval
         self.node = FingerNodeInfo(id, host, port)
+
+    def __str__(self):
+        return f"start: {self.start}, interval {self.interval}, node {self.node}"
 
 
 class ChordNode(Node):
@@ -25,7 +30,7 @@ class ChordNode(Node):
         self.__finger_table = []
         self.__predecessor = FingerNodeInfo(None, None, None)
         i = 1
-        for i in range(1, Node.hash_size):  # 16*8 because MD5 has is 16 bytes
+        for i in range(1, Node.hash_size + 1):  # 16*8 because MD5 has is 16 bytes
             self.__finger_table.append(
                 FingerEntry(
                     start=self.id + 2 ^ (i - 1) % Node.hash_max_num,
@@ -53,10 +58,11 @@ class ChordNode(Node):
                     print(command[1])
                     peer_socket.send("keep".encode("utf-8"))
                 case "find_successor":
-                    self.__find_successor(command[1])
-                    peer_socket.send("keep".encode("utf-8"))
+                    peer_socket.send(
+                        pickle.dumps(self.__find_successor(int(command[1])))
+                    )
                 case "find_predecessor":
-                    self.__find_predecessor(command[1])
+                    self.__find_predecessor(int(command[1]))
                     peer_socket.send("keep".encode("utf-8"))
                 case "closest_preceeding_finger":
                     node = self.__closest_preceeding_finger(int(command[1]))
@@ -67,7 +73,7 @@ class ChordNode(Node):
                     self.__initialize_network()
                     peer_socket.send("keep".encode("utf-8"))
                 case "join":
-                    self.__join(command[1], command[2])
+                    self.__join(command[1], int(command[2]))
                     peer_socket.send("keep".encode("utf-8"))
                 case "update_finger_table":
                     self.__update_finger_table(int(command[1]), int(command[2]))
@@ -80,33 +86,39 @@ class ChordNode(Node):
 
     def __find_successor(self, id: int):
         n = self.__find_predecessor(id)
-        n_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        n_socket.connect((n.host, n.port))
-        n_socket.send("get_your_successor".encode("utf-8"))
-        successor = pickle.loads(n_socket.recv(1024))
-        n_socket.send("close".encode("utf-8"))
-        n_socket.close()
+        if n.id is not self.id:
+            n_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            n_socket.connect((n.host, n.port))
+            n_socket.send("get_your_successor".encode("utf-8"))
+            successor = pickle.loads(n_socket.recv(1024))
+            n_socket.send("close".encode("utf-8"))
+            n_socket.close()
+        else:
+            successor = n
         return successor
 
     def __find_predecessor(self, id: int):
         if id in range(
-            self.id + 1, self.__finger_table[0].node.id + 0
+            self.id + 1, self.__finger_table[0].node.id + 1
         ):  # id not in (self.id, self.successor], [self.id+1, self.successor+1)
             return FingerNodeInfo(self.id, self.host, self.port)
         n = self.__closest_preceeding_finger(id)
-        while True:
-            n_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            n_socket.connect((n.host, n.port))
-            n_socket.send(f"closest_preceeding_finger {id}".encode("utf-8"))
-            n = pickle.loads(n_socket.recv(1024))
-            n_socket.send("close".encode("utf-8"))
-            n_socket.close()
-            if id in range(n.id + 1, n.id + 1):
-                break
+        if n.id is not self.id:
+            while True:
+                n_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                n_socket.connect((n.host, n.port))
+                n_socket.send(f"closest_preceeding_finger {id}".encode("utf-8"))
+                n = pickle.loads(n_socket.recv(1024))
+                n_socket.send("get_your_successor".encode("utf-8"))
+                successor = pickle.loads(n_socket.recv(1024))
+                n_socket.send("close".encode("utf-8"))
+                n_socket.close()
+                if id in range(n.id + 1, successor + 1):  # id in (n.id, sucessor]
+                    break
         return n
 
     def __closest_preceeding_finger(self, id: int):
-        for i in range(Node.hash_size, 0, -1):
+        for i in range(Node.hash_size - 1, 0, -1):
             if self.__finger_table[i].node.id in range(
                 self.id + 1, id
             ):  # node.id in (self.id, id), thus [self.id+1, id)
@@ -115,7 +127,7 @@ class ChordNode(Node):
 
     def __initialize_network(self):
         n = FingerNodeInfo(self.id, self.host, self.port)
-        for i in range(1, Node.hash_size):
+        for i in range(0, Node.hash_size):
             self.__finger_table[i].node = n
         self.__predecessor = n
 
@@ -130,10 +142,10 @@ class ChordNode(Node):
         inviter_socket.send(
             f"find_successor {self.__finger_table[0].start}".encode("utf-8")
         )
-        self.__finger_table[0].node = pickle.loads(inviter_socket.recv(1024))
-        for i in range(1, Node.hash_size - 1):
+        self.__finger_table[0].node = pickle.loads(inviter_socket.recv(10240))
+        for i in range(0, Node.hash_size - 1):
             if self.__finger_table[i + 1].start in range(
-                self.id, self.__finger_table[i].interval
+                self.id, self.__finger_table[i].node.id
             ):
                 self.__finger_table[i + 1].node = self.__finger_table[i].node
             else:
@@ -149,19 +161,20 @@ class ChordNode(Node):
     def __update_others(self):
         for i in range(1, Node.hash_size):
             p = self.__find_predecessor(self.id - 2 ^ (i - 1))
-            p_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            p_socket.connect((p.host, p.port))
-            p_socket.send(f"update_finger_table {self.id} {i}".encode("utf-8"))
-            _ = p_socket.recv(1024).decode("utf-8")
-            p_socket.send("close".encode("utf-8"))
-            p_socket.close()
+            if p.id is not self.id:
+                p_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                p_socket.connect((p.host, p.port))
+                p_socket.send(f"update_finger_table {self.id} {i}".encode("utf-8"))
+                _ = p_socket.recv(1024)
+                p_socket.send("close".encode("utf-8"))
+                p_socket.close()
 
-    def __update_finger_table(self, id, i):
+    def __update_finger_table(self, id: int, i: int):
         if id in range(self.id, self.__finger_table[i].node.id):
             self.__finger_table[i].node = id
             p_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             p_socket.connect((self.__predecessor.host, self.__predecessor.port))
             p_socket.send(f"update_finger_table {self.id} {i}".encode("utf-8"))
-            _ = p_socket.recv(1024).decode("utf-8")
+            _ = p_socket.recv(1024)
             p_socket.send("close".encode("utf-8"))
             p_socket.close()
