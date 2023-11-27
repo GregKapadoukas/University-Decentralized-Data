@@ -5,7 +5,7 @@ import time
 
 import pandas as pd
 
-from node.node import Node
+from node.chord import ChordNode
 
 df = pd.read_csv("dataset/list_of_computer_scientists.csv")
 data = {}
@@ -18,7 +18,7 @@ for institution, df_group in df.groupby(["Institution"]):
 num_nodes = 2
 processes = []
 for i in range(num_nodes):
-    node = Node("localhost", 8000 + i)
+    node = ChordNode("localhost", 8000 + i)
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()
 
