@@ -6,7 +6,7 @@ import time
 
 import pandas as pd
 
-from node.chord import ChordNode
+from node.chord import ChordNode, FingerUpdateSettings
 
 df = pd.read_csv("dataset/list_of_computer_scientists.csv")
 data = {}
@@ -20,7 +20,11 @@ num_nodes = 10
 processes = []
 base_port = random.randint(8000, 10000)
 for i in range(num_nodes):
-    node = ChordNode("localhost", base_port + i)
+    node = ChordNode(
+        host="localhost",
+        port=base_port + i,
+        finger_update_settings=FingerUpdateSettings("normal", 5, 3),
+    )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()
     time.sleep(1)

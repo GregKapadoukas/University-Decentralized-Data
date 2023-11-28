@@ -1,7 +1,17 @@
 import pickle
+import random
 import socket
+import threading
+import time
 
 from node.node import Node
+
+
+class FingerUpdateSettings:
+    def __init__(self, mode, stabilize_interval, fix_fingers_interval):
+        self.mode = mode
+        self.stabilize_interval = stabilize_interval
+        self.fix_fingers_interval = fix_fingers_interval
 
 
 class FingerNodeInfo:
@@ -25,8 +35,14 @@ class FingerEntry:
 
 
 class ChordNode(Node):
-    def __init__(self, host, port):
+    def __init__(
+        self,
+        host,
+        port,
+        finger_update_settings,
+    ):
         super().__init__(host, port)
+        self.__finger_update_mode = finger_update_settings.mode
         self.__finger_table = []
         self.__predecessor = FingerNodeInfo(None, None, None)
         i = 1
@@ -43,6 +59,12 @@ class ChordNode(Node):
                     port=None,
                 )
             )
+        if self.__finger_update_mode == "normal":
+            self.__stabilize_interval = finger_update_settings.stabilize_interval
+            self.__fix_fingers_interval = finger_update_settings.fix_fingers_interval
+            self.__stabilize_thread = threading.Thread(target=self.__stabilize)
+            self.__fix_fingers_thread = threading.Thread(target=self.__fix_fingers)
+            self.__active = True
 
     def handleCommands(self, peer_socket):
         while True:
@@ -51,6 +73,10 @@ class ChordNode(Node):
                 case "leave":
                     # Add communication to successor and __predecessor
                     # Inform requester
+                    if self.__finger_update_mode == "normal":
+                        self.__active = False
+                        self.__stabilize_thread.join()
+                        self.__fix_fingers_thread.join()
                     peer_socket.send("close".encode("utf-8"))
                     peer_socket.close()
                     return "close"
@@ -69,6 +95,8 @@ class ChordNode(Node):
                     peer_socket.sendall(pickle.dumps(node))
                 case "get_your_successor":
                     peer_socket.sendall(pickle.dumps(self.__finger_table[0].node))
+                case "get_your_predecessor":
+                    peer_socket.sendall(pickle.dumps(self.__predecessor))
                 case "initialize_network":
                     self.__initialize_network()
                     peer_socket.send("keep".encode("utf-8"))
@@ -77,6 +105,9 @@ class ChordNode(Node):
                     peer_socket.send("keep".encode("utf-8"))
                 case "update_finger_table":
                     self.__update_finger_table(int(command[1]), int(command[2]))
+                    peer_socket.send("keep".encode("utf-8"))
+                case "notify":
+                    self.__notify(int(command[1]), str(command[2]), int(command[3]))
                     peer_socket.send("keep".encode("utf-8"))
                 case "close":
                     peer_socket.close()
@@ -132,9 +163,23 @@ class ChordNode(Node):
         self.__predecessor = n
 
     def __join(self, inviter_host: str, inviter_port: int):
-        self.__init_finger_table(inviter_host, inviter_port)
-        self.__update_others()
-        # move keys in (predecessor, n] from successor
+        if self.__finger_update_mode == "aggressive":
+            self.__predecessor = FingerNodeInfo(self.id, self.host, self.port)
+            # self.__predecessor = None
+            inviter_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            inviter_socket.connect((inviter_host, inviter_port))
+            inviter_socket.send(
+                f"find_successor {self.__finger_table[0].start}".encode("utf-8")
+            )
+            self.__finger_table[0].node = pickle.loads(inviter_socket.recv(10240))
+            inviter_socket.send("close".encode("utf-8"))
+            inviter_socket.close()
+            # move keys in (predecessor, n] from successor
+        else:
+            self.__init_finger_table(inviter_host, inviter_port)
+            self.__update_others()
+            self.__stabilize_thread.start()
+            self.__fix_fingers_thread.start()
 
     def __init_finger_table(self, inviter_host: str, inviter_port: int):
         inviter_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -178,3 +223,39 @@ class ChordNode(Node):
             _ = p_socket.recv(1024)
             p_socket.send("close".encode("utf-8"))
             p_socket.close()
+
+    def __stabilize(self):
+        while self.__active:
+            s_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s_socket.connect(
+                (self.__finger_table[0].node.host, self.__finger_table[0].node.port)
+            )
+            s_socket.send("get_your_predecessor".encode("utf-8"))
+            successors_predecessor = pickle.loads(s_socket.recv(10240))
+            s_socket.send("close".encode("utf-8"))
+            s_socket.close()
+            if successors_predecessor not in range(
+                self.id + 1, self.__finger_table[0].node.id
+            ):  # successors_predecessor not in (self.id, successor.id), thus [self.id+1, successor.id)
+                self.__finger_table[0].node = successors_predecessor
+            s_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s_socket.connect(
+                (self.__finger_table[0].node.host, self.__finger_table[0].node.port)
+            )
+            s_socket.send(f"notify {self.id} {self.host} {self.port}".encode("utf-8"))
+            _ = s_socket.recv(1024)
+            s_socket.send("close".encode("utf-8"))
+            s_socket.close()
+            time.sleep(self.__stabilize_interval)
+
+    def __notify(self, id: int, host: str, port: int):
+        if self.__predecessor is self.id or id in range(self.__predecessor.id, self.id):
+            self.__predecessor = FingerNodeInfo(id, host, port)
+
+    def __fix_fingers(self):
+        while self.__active:
+            i = random.randint(0, 127)
+            self.__finger_table[i].node = self.__find_successor(
+                self.__finger_table[i].start
+            )
+            time.sleep(self.__fix_fingers_interval)
