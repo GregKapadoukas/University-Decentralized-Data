@@ -1,4 +1,3 @@
-# %%
 import multiprocessing
 import random
 import socket
@@ -23,7 +22,7 @@ for i in range(num_nodes):
     node = ChordNode(
         host="localhost",
         port=base_port + i,
-        finger_update_settings=FingerUpdateSettings("normal", 5, 3),
+        finger_update_settings=FingerUpdateSettings("normal", 20, 0.01),
     )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()

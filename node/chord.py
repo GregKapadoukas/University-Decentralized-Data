@@ -112,6 +112,9 @@ class ChordNode(Node):
                 case "close":
                     peer_socket.close()
                     return "continue"
+                case "get_finger_table":
+                    print(self.__finger_table[int(command[1])].node)
+                    peer_socket.send("keep".encode("utf-8"))
                 case _:
                     peer_socket.send("invalid".encode("utf-8"))
 
@@ -161,9 +164,16 @@ class ChordNode(Node):
         for i in range(0, Node.hash_size):
             self.__finger_table[i].node = n
         self.__predecessor = n
+        if self.__finger_update_mode == "normal":
+            self.__stabilize_thread.start()
+            self.__fix_fingers_thread.start()
 
     def __join(self, inviter_host: str, inviter_port: int):
         if self.__finger_update_mode == "aggressive":
+            self.__init_finger_table(inviter_host, inviter_port)
+            self.__update_others()
+            # move keys in (predecessor, n] from successor
+        else:
             self.__predecessor = FingerNodeInfo(self.id, self.host, self.port)
             # self.__predecessor = None
             inviter_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -174,10 +184,6 @@ class ChordNode(Node):
             self.__finger_table[0].node = pickle.loads(inviter_socket.recv(10240))
             inviter_socket.send("close".encode("utf-8"))
             inviter_socket.close()
-            # move keys in (predecessor, n] from successor
-        else:
-            self.__init_finger_table(inviter_host, inviter_port)
-            self.__update_others()
             self.__stabilize_thread.start()
             self.__fix_fingers_thread.start()
 
@@ -188,6 +194,7 @@ class ChordNode(Node):
             f"find_successor {self.__finger_table[0].start}".encode("utf-8")
         )
         self.__finger_table[0].node = pickle.loads(inviter_socket.recv(10240))
+        # Fix updating of successor.predecessor
         for i in range(0, Node.hash_size - 1):
             if self.__finger_table[i + 1].start in range(
                 self.id, self.__finger_table[i].node.id
@@ -226,26 +233,44 @@ class ChordNode(Node):
 
     def __stabilize(self):
         while self.__active:
-            s_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s_socket.connect(
-                (self.__finger_table[0].node.host, self.__finger_table[0].node.port)
-            )
-            s_socket.send("get_your_predecessor".encode("utf-8"))
-            successors_predecessor = pickle.loads(s_socket.recv(10240))
-            s_socket.send("close".encode("utf-8"))
-            s_socket.close()
-            if successors_predecessor not in range(
-                self.id + 1, self.__finger_table[0].node.id
-            ):  # successors_predecessor not in (self.id, successor.id), thus [self.id+1, successor.id)
-                self.__finger_table[0].node = successors_predecessor
-            s_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s_socket.connect(
-                (self.__finger_table[0].node.host, self.__finger_table[0].node.port)
-            )
-            s_socket.send(f"notify {self.id} {self.host} {self.port}".encode("utf-8"))
-            _ = s_socket.recv(1024)
-            s_socket.send("close".encode("utf-8"))
-            s_socket.close()
+            successor, finger_position = self.__get_successor()
+            if finger_position != -1:
+                try:
+                    s_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s_socket.connect(
+                        (
+                            successor.host,
+                            successor.port,
+                        )
+                    )
+                    s_socket.send("get_your_predecessor".encode("utf-8"))
+                    successors_predecessor = pickle.loads(s_socket.recv(10240))
+                    s_socket.send("close".encode("utf-8"))
+                    s_socket.close()
+                    if successors_predecessor not in range(
+                        self.id + 1, successor.id
+                    ):  # successors_predecessor not in (self.id, successor.id), thus [self.id+1, successor.id)
+                        successor = successors_predecessor
+                    if self.id != successor.id:
+                        s_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s_socket.connect(
+                            (
+                                successor.host,
+                                successor.port,
+                            )
+                        )
+                        s_socket.send(
+                            f"notify {self.id} {self.host} {self.port}".encode("utf-8")
+                        )
+                        _ = s_socket.recv(1024)
+                        s_socket.send("close".encode("utf-8"))
+                        s_socket.close()
+                except Exception:
+                    print("Peer lost")
+                    self.__finger_table[finger_position].node = FingerNodeInfo(
+                        self.id, self.host, self.port
+                    )
+                    print("updating successor")
             time.sleep(self.__stabilize_interval)
 
     def __notify(self, id: int, host: str, port: int):
@@ -259,3 +284,11 @@ class ChordNode(Node):
                 self.__finger_table[i].start
             )
             time.sleep(self.__fix_fingers_interval)
+
+    def __get_successor(self):
+        i = 0
+        for entry in self.__finger_table:
+            if entry.node.id is not self.id:
+                return entry.node, i
+            i += 1
+        return FingerNodeInfo(self.id, self.host, self.port), -1
