@@ -15,14 +15,14 @@ for institution, df_group in df.groupby(["Institution"]):
         people.append([row["Name"], row["Awards"]])
     data[institution[0]] = people
 
-num_nodes = 10
+num_nodes = 30
 processes = []
 base_port = random.randint(8000, 10000)
 for i in range(num_nodes):
     node = ChordNode(
         host="localhost",
         port=base_port + i,
-        finger_update_settings=FingerUpdateSettings("normal", 20, 0.01),
+        finger_update_settings=FingerUpdateSettings("aggressive", None, None),
     )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()

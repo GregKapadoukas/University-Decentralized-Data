@@ -5,7 +5,7 @@ import socket
 # Abstract class to be inherited by CordNode and PastryNode classes
 class Node:
     hash_size = 16 * 8
-    hash_max_num = 2 ^ hash_size
+    hash_max_num = 2**hash_size
 
     def __init__(self, host, port):
         self.id = int(hashlib.md5((host + str(port)).encode()).hexdigest(), 16)
