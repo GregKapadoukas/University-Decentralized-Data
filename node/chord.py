@@ -7,14 +7,14 @@ from node.node import Node
 from node.request import send_command, send_command_with_response
 
 
-class FingerUpdateSettings:
-    def __init__(self, mode, stabilize_interval, fix_fingers_interval):
-        self.mode = mode
+class ChordNodeSettings:
+    def __init__(self, size_successor_list, stabilize_interval, fix_fingers_interval):
+        self.size_successor_list = size_successor_list
         self.stabilize_interval = stabilize_interval
         self.fix_fingers_interval = fix_fingers_interval
 
 
-class FingerNodeInfo:
+class NodeInfo:
     def __init__(self, id, host, port):
         self.id = id
         self.host = host
@@ -28,7 +28,7 @@ class FingerEntry:
     def __init__(self, start, interval, id, host, port):
         self.start = start
         self.interval = interval
-        self.node = FingerNodeInfo(id, host, port)
+        self.node = NodeInfo(id, host, port)
 
     def __str__(self):
         return f"start: {self.start}, interval {self.interval}, node {self.node}"
@@ -39,12 +39,11 @@ class ChordNode(Node):
         self,
         host,
         port,
-        finger_update_settings,
+        settings,
     ):
         super().__init__(host, port)
-        self.__finger_update_mode = finger_update_settings.mode
+        self.__predecessor = NodeInfo(self.id, self.host, self.port)
         self.__finger_table = []
-        self.__predecessor = FingerNodeInfo(self.id, self.host, self.port)
         i = 1
         for i in range(1, Node.hash_size + 1):  # 16*8 because MD5 has is 16 bytes
             self.__finger_table.append(
@@ -59,12 +58,14 @@ class ChordNode(Node):
                     port=self.port,
                 )
             )
-        if self.__finger_update_mode == "normal":
-            self.__stabilize_interval = finger_update_settings.stabilize_interval
-            self.__fix_fingers_interval = finger_update_settings.fix_fingers_interval
-            self.__stabilize_thread = threading.Thread(target=self.__stabilize)
-            self.__fix_fingers_thread = threading.Thread(target=self.__fix_fingers)
-            self.__active = True
+        self.__successor_list = []
+        for i in range(i, settings.size_successor_list):
+            self.__successor_list.append(NodeInfo(self.id, self.host, self.port))
+        self.__stabilize_interval = settings.stabilize_interval
+        self.__fix_fingers_interval = settings.fix_fingers_interval
+        self.__stabilize_thread = threading.Thread(target=self.__stabilize)
+        self.__fix_fingers_thread = threading.Thread(target=self.__fix_fingers)
+        self.__active = True
 
     def handleCommands(self, peer_socket):
         while True:
@@ -75,16 +76,15 @@ class ChordNode(Node):
                 case "leave":
                     # Add communication to successor and __predecessor
                     # Inform requester
-                    if self.__finger_update_mode == "normal":
-                        self.__active = False
-                        self.__stabilize_thread.join()
-                        self.__fix_fingers_thread.join()
+                    self.__active = False
+                    self.__stabilize_thread.join()
+                    self.__fix_fingers_thread.join()
                     self.__leave()
                     peer_socket.send("done".encode("utf-8"))
                     peer_socket.close()
                     return "close"
                 case "set_predecessor":
-                    self.__predecessor = FingerNodeInfo(
+                    self.__predecessor = NodeInfo(
                         int(command[1]), str(command[2]), int(command[3])
                     )
                     peer_socket.send("done".encode("utf-8"))
@@ -120,7 +120,7 @@ class ChordNode(Node):
                     )
                     peer_socket.send("done".encode("utf-8"))
                 case "notify":
-                    # print("Got commmand")
+                    # print("Got command")
                     self.__notify(int(command[1]), str(command[2]), int(command[3]))
                     peer_socket.send("done".encode("utf-8"))
                 case "close":
@@ -130,7 +130,7 @@ class ChordNode(Node):
                     return "continue"
                 # For debugging
                 case "get_self":
-                    print(FingerNodeInfo(self.id, self.host, self.port))
+                    print(NodeInfo(self.id, self.host, self.port))
                     peer_socket.send("done".encode("utf-8"))
                 case "get_finger_table":
                     if len(command) > 1:
@@ -163,7 +163,7 @@ class ChordNode(Node):
         if self.__circular_range(
             id, self.id + 1, self.__finger_table[0].node.id + 1
         ):  # id not in (self.id, self.successor], [self.id+1, self.successor+1)
-            return FingerNodeInfo(self.id, self.host, self.port)
+            return NodeInfo(self.id, self.host, self.port)
         # You are not the predecessor
         n = self.__closest_preceeding_finger(id)
         # print(f"My closest finger is: {n} (obviously 1)")
@@ -190,97 +190,29 @@ class ChordNode(Node):
                 self.__finger_table[i].node.id, self.id + 1, id
             ):  # node.id in (self.id, id), thus [self.id+1, id)
                 return self.__finger_table[i].node
-        return FingerNodeInfo(self.id, self.host, self.port)
+        return NodeInfo(self.id, self.host, self.port)
 
     def __initialize_network(self):
-        n = FingerNodeInfo(self.id, self.host, self.port)
+        n = NodeInfo(self.id, self.host, self.port)
         for i in range(0, Node.hash_size):
             self.__finger_table[i].node = n
         self.__predecessor = n
-        if self.__finger_update_mode == "normal":
-            self.__stabilize_thread.start()
-            self.__fix_fingers_thread.start()
+        self.__stabilize_thread.start()
+        self.__fix_fingers_thread.start()
 
     def __join(self, inviter_host: str, inviter_port: int):
-        if self.__finger_update_mode == "aggressive":
-            self.__init_finger_table(inviter_host, inviter_port)
-            self.__update_others()
-        else:
-            self.__predecessor = FingerNodeInfo(self.id, self.host, self.port)
-            # print(f"Setting my predecessor to: {self.__predecessor}")
-            # self.__predecessor = None
-            self.__finger_table[0].node = send_command_with_response(
-                f"find_successor {self.__finger_table[0].start}",
-                inviter_host,
-                inviter_port,
-            )
-            # print(f"Setting my successor to: {self.__finger_table[0].node}")
-            self.__stabilize_thread.start()
-            self.__fix_fingers_thread.start()
-        # move values in (predecessor, n] from successor
-
-    def __init_finger_table(self, inviter_host: str, inviter_port: int):
-        # Get your successor
+        self.__predecessor = NodeInfo(self.id, self.host, self.port)
+        # print(f"Setting my predecessor to: {self.__predecessor}")
+        # self.__predecessor = None
         self.__finger_table[0].node = send_command_with_response(
-            f"find_successor {self.__finger_table[0].start}", inviter_host, inviter_port
+            f"find_successor {self.__finger_table[0].start}",
+            inviter_host,
+            inviter_port,
         )
-        # print(f"Looking for successor of: {self.__finger_table[0].start}")
-        # print(f"My successor is: {self.__finger_table[0].node.id}")
-
-        # Get your predecessor
-        self.__predecessor = send_command_with_response(
-            "get_your_predecessor",
-            self.__finger_table[0].node.host,
-            self.__finger_table[0].node.port,
-        )
-        # print(f"My predecessor is {self.__predecessor.id}")
-
-        # Tell your successor to make you predecessor
-        send_command(
-            f"notify {self.id} {self.host} {self.port}",
-            self.__finger_table[0].node.host,
-            self.__finger_table[0].node.port,
-        )
-
-        # Get your finger table
-        for i in range(0, Node.hash_size - 1):
-            if self.__circular_range(
-                self.__finger_table[i + 1].start,
-                self.id,
-                self.__finger_table[i].node.id,
-            ):
-                self.__finger_table[i + 1].node = self.__finger_table[i].node
-                # print(
-                #    f"Updating finger_table[{i+1}] to: {self.__finger_table[i+1].node.id}"
-                # )
-            else:
-                self.__finger_table[i + 1].node = send_command_with_response(
-                    f"find_successor {self.__finger_table[i+1].start}",
-                    inviter_host,
-                    inviter_port,
-                )
-                # print(
-                #    f"Updating finger_table[{i+1}] to: {self.__finger_table[i+1].node.id}"
-                # )
-        # print("Finished with init_finger_table")
-
-    def __update_others(self):
-        for i in range(1, Node.hash_size + 1):
-            # print(
-            #    f"Looking for node preceding: {(self.id - 2 ** (i-1)) % Node.hash_max_num}"
-            # )
-            p = self.__find_predecessor((self.id - 2 ** (i - 1)) % Node.hash_max_num)
-            # print(f"Found node {p.id}")
-            if p.id != self.id:
-                # print("It's not me")
-                send_command(
-                    f"update_finger_table {self.id} {self.host} {self.port} {i-1}",
-                    p.host,
-                    p.port,
-                )
-            else:
-                # print("It's me")
-                self.__update_finger_table(self.id, self.host, self.port, i - 1)
+        # print(f"Setting my successor to: {self.__finger_table[0].node}")
+        self.__stabilize_thread.start()
+        self.__fix_fingers_thread.start()
+        # move values in (predecessor, n] from successor
 
     def __update_finger_table(self, id: int, host: str, port: int, i: int):
         # if circular_range(id, self.id, self.__finger_table[i].node.id):
@@ -288,7 +220,7 @@ class ChordNode(Node):
             id, self.__finger_table[i].start, self.__finger_table[i].node.id
         ):
             # print(f"Updating node: {self.id} finger tables with me: {id}")
-            self.__finger_table[i].node = FingerNodeInfo(id, host, port)
+            self.__finger_table[i].node = NodeInfo(id, host, port)
             if self.__predecessor.id != self.__finger_table[i].node.id:
                 send_command(
                     f"update_finger_table {id} {host} {port} {i}",
@@ -324,7 +256,7 @@ class ChordNode(Node):
                     )
                 time.sleep(self.__stabilize_interval)
             except Exception:
-                self.__finger_table[finger_position].node = FingerNodeInfo(
+                self.__finger_table[finger_position].node = NodeInfo(
                     self.id, self.host, self.port
                 )
                 print(f"{self.id}: Stabilize: Detected unexpected node disconnection")
@@ -332,7 +264,7 @@ class ChordNode(Node):
     def __notify(self, id: int, host: str, port: int):
         # print("Entered notify")
         if self.__circular_range(id, self.__predecessor.id, self.id):
-            self.__predecessor = FingerNodeInfo(id, host, port)
+            self.__predecessor = NodeInfo(id, host, port)
             # print(f"{self.id}: Updating predecessor to {self.__predecessor}")
         # print("Exited notify")
 
@@ -353,22 +285,11 @@ class ChordNode(Node):
             if entry.node.id != self.id:
                 return entry.node, i
             i += 1
-        return FingerNodeInfo(self.id, self.host, self.port), -1
+        return NodeInfo(self.id, self.host, self.port), -1
 
     def __leave(self):
         # Send data to predecessor
-
-        # Updating successor's predecessor
-        send_command(
-            f"update_predecessor {self.__predecessor.id} {self.__predecessor.host} {self.__predecessor.port}",
-            self.__finger_table[0].node.host,
-            self.__finger_table[0].node.port,
-        )
-
-        # If aggressive, just update all appropriate finger tables, else in normal stabilize and fix_fingers will correct entries automatically
-        if self.__finger_update_mode == "aggressive":
-            # Updating others finger tables (should remove self from finger tables, because of the successor's predecessor fix
-            self.__update_others()
+        pass
 
     def __circular_range(self, value, start, end):
         if start < end:

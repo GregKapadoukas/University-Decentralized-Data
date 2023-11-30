@@ -5,7 +5,7 @@ import time
 
 import pandas as pd
 
-from node.chord import ChordNode, FingerUpdateSettings
+from node.chord import ChordNode, ChordNodeSettings
 from node.request import send_command
 
 df = pd.read_csv("dataset/list_of_computer_scientists.csv")
@@ -17,13 +17,14 @@ for institution, df_group in df.groupby(["Institution"]):
     data[institution[0]] = people  # type: ignore
 
 num_nodes = 3
+size_successor_list = 2
 processes = []
 base_port = random.randint(8000, 10000)
 for i in range(num_nodes):
     node = ChordNode(
         host="localhost",
         port=base_port + i,
-        finger_update_settings=FingerUpdateSettings("normal", 3, 0.05),
+        settings=ChordNodeSettings(2, 3, 0.05),
     )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()
