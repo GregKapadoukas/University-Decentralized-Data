@@ -6,6 +6,7 @@ import time
 import pandas as pd
 
 from node.chord import ChordNode, FingerUpdateSettings
+from node.request import send_command
 
 df = pd.read_csv("dataset/list_of_computer_scientists.csv")
 data = {}
@@ -13,16 +14,16 @@ for institution, df_group in df.groupby(["Institution"]):
     people = []
     for row_index, row in df_group.iterrows():
         people.append([row["Name"], row["Awards"]])
-    data[institution[0]] = people
+    data[institution[0]] = people  # type: ignore
 
-num_nodes = 30
+num_nodes = 3
 processes = []
 base_port = random.randint(8000, 10000)
 for i in range(num_nodes):
     node = ChordNode(
         host="localhost",
         port=base_port + i,
-        finger_update_settings=FingerUpdateSettings("aggressive", None, None),
+        finger_update_settings=FingerUpdateSettings("normal", 3, 0.05),
     )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()
@@ -41,20 +42,16 @@ for i in range(num_nodes):
 
 # Placeholder from now on
 # Test communication with nodes
-for i in range(num_nodes):
-    node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    node_socket.connect(("localhost", base_port + i))
-    try:
-        print(f"Connecting to localhost:{base_port+i}")
-        while True:
-            msg = input("Enter command: ")
-            node_socket.send(msg.encode("utf-8")[:1024])
-            response = node_socket.recv(1024).decode("utf-8")
-            if response == "close":
-                node_socket.close()
-                print("Closing connection")
-                break
-            elif response == "invalid":
-                print("Invalid Command")
-    except Exception as e:
-        print(f"Error: {e}")
+print('Enter command in the following format "node_host" node_port" "command"')
+while True:
+    msg = input("# ")
+    if msg == "exit":
+        for process in processes:
+            process.terminate()
+            process.join()
+        break
+    msg = msg.split(" ", 2)
+    if len(msg) == 3:
+        send_command(str(msg[2]), str(msg[0]), int(msg[1]))
+    else:
+        print("Invalid Command")
