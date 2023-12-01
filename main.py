@@ -24,7 +24,7 @@ for i in range(num_nodes):
     node = ChordNode(
         host="localhost",
         port=base_port + i,
-        settings=ChordNodeSettings(2, 3, 0.05),
+        settings=ChordNodeSettings(size_successor_list, 3, 0.05),
     )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()

@@ -59,7 +59,7 @@ class ChordNode(Node):
                 )
             )
         self.__successor_list = []
-        for i in range(i, settings.size_successor_list):
+        for i in range(settings.size_successor_list):
             self.__successor_list.append(NodeInfo(self.id, self.host, self.port))
         self.__stabilize_interval = settings.stabilize_interval
         self.__fix_fingers_interval = settings.fix_fingers_interval
@@ -83,13 +83,10 @@ class ChordNode(Node):
                     peer_socket.send("done".encode("utf-8"))
                     peer_socket.close()
                     return "close"
-                case "set_predecessor":
-                    self.__predecessor = NodeInfo(
-                        int(command[1]), str(command[2]), int(command[3])
-                    )
-                    peer_socket.send("done".encode("utf-8"))
                 case "print":
                     print(command[1])
+                    peer_socket.send("done".encode("utf-8"))
+                case "ping":
                     peer_socket.send("done".encode("utf-8"))
                 case "find_successor":
                     peer_socket.send(
@@ -102,7 +99,7 @@ class ChordNode(Node):
                     node = self.__closest_preceeding_finger(int(command[1]))
                     peer_socket.sendall(pickle.dumps(node))
                 case "get_your_successor":
-                    peer_socket.sendall(pickle.dumps(self.__finger_table[0].node))
+                    peer_socket.sendall(pickle.dumps(self.__get_successor()))
                 case "get_your_predecessor":
                     peer_socket.sendall(pickle.dumps(self.__predecessor))
                 case "initialize_network":
@@ -110,14 +107,6 @@ class ChordNode(Node):
                     peer_socket.send("done".encode("utf-8"))
                 case "join":
                     self.__join(command[1], int(command[2]))
-                    peer_socket.send("done".encode("utf-8"))
-                case "update_finger_table":
-                    self.__update_finger_table(
-                        int(command[1]),
-                        str(command[2]),
-                        int(command[3]),
-                        int(command[4]),
-                    )
                     peer_socket.send("done".encode("utf-8"))
                 case "notify":
                     # print("Got command")
@@ -139,6 +128,13 @@ class ChordNode(Node):
                         for entry in self.__finger_table:
                             print(entry)
                     peer_socket.send("done".encode("utf-8"))
+                case "get_successor_list":
+                    if len(command) > 1:
+                        print(self.__successor_list[int(command[1])])
+                    else:
+                        for entry in self.__successor_list:
+                            print(entry)
+                    peer_socket.send("done".encode("utf-8"))
                 case "get_predecessor":
                     print(self.__predecessor)
                     peer_socket.send("done".encode("utf-8"))
@@ -155,13 +151,13 @@ class ChordNode(Node):
         # If you are the successor
         else:
             # print("Inviter: I am the predecessor, take my successor")
-            successor = self.__finger_table[0].node
+            successor = self.__get_successor()
         return successor
 
     def __find_predecessor(self, id: int):
         # You are the predecessor
         if self.__circular_range(
-            id, self.id + 1, self.__finger_table[0].node.id + 1
+            id, self.id + 1, self.__get_successor().id + 1
         ):  # id not in (self.id, self.successor], [self.id+1, self.successor+1)
             return NodeInfo(self.id, self.host, self.port)
         # You are not the predecessor
@@ -204,62 +200,48 @@ class ChordNode(Node):
         self.__predecessor = NodeInfo(self.id, self.host, self.port)
         # print(f"Setting my predecessor to: {self.__predecessor}")
         # self.__predecessor = None
-        self.__finger_table[0].node = send_command_with_response(
+        self.__successor_list[0] = send_command_with_response(
             f"find_successor {self.__finger_table[0].start}",
             inviter_host,
             inviter_port,
         )
-        # print(f"Setting my successor to: {self.__finger_table[0].node}")
         self.__stabilize_thread.start()
         self.__fix_fingers_thread.start()
         # move values in (predecessor, n] from successor
 
-    def __update_finger_table(self, id: int, host: str, port: int, i: int):
-        # if circular_range(id, self.id, self.__finger_table[i].node.id):
-        if self.__circular_range(
-            id, self.__finger_table[i].start, self.__finger_table[i].node.id
-        ):
-            # print(f"Updating node: {self.id} finger tables with me: {id}")
-            self.__finger_table[i].node = NodeInfo(id, host, port)
-            if self.__predecessor.id != self.__finger_table[i].node.id:
-                send_command(
-                    f"update_finger_table {id} {host} {port} {i}",
-                    self.__predecessor.host,
-                    self.__predecessor.port,
-                )
-
     def __stabilize(self):
         while self.__active:
             # print(f"{self.id}: Stabilizing")
-            successor, finger_position = self.__get_successor()
-            try:
-                # print(f"{self.id}: Stabilizing with successor {successor} in position {finger_position}")
-                if finger_position != -1:
-                    # print(f"{self.id}: Got out")
-                    successors_predecessor = send_command_with_response(
-                        "get_your_predecessor", successor.host, successor.port
-                    )
-                else:
-                    successors_predecessor = self.__predecessor
-                if self.__circular_range(
-                    successors_predecessor.id, self.id + 1, successor.id
-                ):  # successors_predecessor not in (self.id, successor.id), thus [self.id+1, successor.id)
-                    successor = successors_predecessor
-                    self.__finger_table[0].node = successor
-                    # print(f"{self.id}: Updating successor to {self.__finger_table[0].node}")
-                if self.id != successor.id:
-                    # print(f"{self.id}: Notifying {successor}")
-                    send_command(
-                        f"notify {self.id} {self.host} {self.port}",
-                        successor.host,
-                        successor.port,
-                    )
-                time.sleep(self.__stabilize_interval)
-            except Exception:
-                self.__finger_table[finger_position].node = NodeInfo(
-                    self.id, self.host, self.port
+            successor = self.__get_successor()
+            # print(f"{self.id}: Stabilizing with successor {successor} in position {finger_position}")
+            if successor.id != self.id:
+                # print(f"{self.id}: Got out")
+                successors_predecessor = send_command_with_response(
+                    "get_your_predecessor", successor.host, successor.port
                 )
-                print(f"{self.id}: Stabilize: Detected unexpected node disconnection")
+            else:
+                successors_predecessor = self.__predecessor
+            if self.__circular_range(
+                successors_predecessor.id, self.id + 1, successor.id
+            ):  # successors_predecessor not in (self.id, successor.id), thus [self.id+1, successor.id)
+                successor = successors_predecessor
+                self.__successor_list[0] = successor
+                for i in range(1, len(self.__successor_list)):
+                    self.__successor_list[i] = send_command_with_response(
+                        "get_your_successor",
+                        self.__successor_list[i - 1].host,
+                        self.__successor_list[i - 1].port,
+                    )
+
+                # print(f"{self.id}: Updating successor to {self.__finger_table[0].node}")
+            if self.id != successor.id:
+                # print(f"{self.id}: Notifying {successor}")
+                send_command(
+                    f"notify {self.id} {self.host} {self.port}",
+                    successor.host,
+                    successor.port,
+                )
+            time.sleep(self.__stabilize_interval)
 
     def __notify(self, id: int, host: str, port: int):
         # print("Entered notify")
@@ -280,12 +262,14 @@ class ChordNode(Node):
             time.sleep(self.__fix_fingers_interval)
 
     def __get_successor(self):
-        i = 0
-        for entry in self.__finger_table:
-            if entry.node.id != self.id:
-                return entry.node, i
-            i += 1
-        return NodeInfo(self.id, self.host, self.port), -1
+        for entry in self.__successor_list:
+            if entry.id != self.id:
+                try:
+                    send_command("ping", entry.host, entry.port)
+                    return entry
+                except Exception:
+                    pass
+        return NodeInfo(self.id, self.host, self.port)
 
     def __leave(self):
         # Send data to predecessor
