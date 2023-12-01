@@ -24,11 +24,11 @@ for i in range(num_nodes):
     node = ChordNode(
         host="localhost",
         port=base_port + i,
-        settings=ChordNodeSettings(size_successor_list, 3, 0.05),
+        settings=ChordNodeSettings(size_successor_list, 3, 0.05, 0.05),
     )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()
-    time.sleep(3)
+    time.sleep(0.01)
     node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     node_socket.connect(("localhost", base_port + i))
     if i == 0:

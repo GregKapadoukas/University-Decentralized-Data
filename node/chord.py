@@ -1,17 +1,26 @@
+import hashlib
 import pickle
 import random
 import threading
 import time
 
-from node.node import Node
-from node.request import send_command, send_command_with_response
+from node.node import P2PNode
+from node.request import (send_command, send_command_with_response,
+                          send_store_command)
 
 
 class ChordNodeSettings:
-    def __init__(self, size_successor_list, stabilize_interval, fix_fingers_interval):
+    def __init__(
+        self,
+        size_successor_list,
+        stabilize_interval,
+        fix_fingers_interval,
+        ping_successors_interval,
+    ):
         self.size_successor_list = size_successor_list
         self.stabilize_interval = stabilize_interval
         self.fix_fingers_interval = fix_fingers_interval
+        self.ping_successors_interval = ping_successors_interval
 
 
 class NodeInfo:
@@ -34,7 +43,7 @@ class FingerEntry:
         return f"start: {self.start}, interval {self.interval}, node {self.node}"
 
 
-class ChordNode(Node):
+class ChordNode(P2PNode):
     def __init__(
         self,
         host,
@@ -45,13 +54,13 @@ class ChordNode(Node):
         self.__predecessor = NodeInfo(self.id, self.host, self.port)
         self.__finger_table = []
         i = 1
-        for i in range(1, Node.hash_size + 1):  # 16*8 because MD5 has is 16 bytes
+        for i in range(1, P2PNode.hash_size + 1):  # 16*8 because MD5 has is 16 bytes
             self.__finger_table.append(
                 FingerEntry(
-                    start=(self.id + (2 ** (i - 1))) % Node.hash_max_num,
+                    start=(self.id + (2 ** (i - 1))) % P2PNode.hash_max_num,
                     interval=range(
-                        (self.id + (2 ** (i - 1))) % Node.hash_max_num,
-                        (self.id + (2 ** (i))) % Node.hash_max_num,
+                        (self.id + (2 ** (i - 1))) % P2PNode.hash_max_num,
+                        (self.id + (2 ** (i))) % P2PNode.hash_max_num,
                     ),
                     id=self.id,
                     host=self.host,
@@ -63,11 +72,13 @@ class ChordNode(Node):
             self.__successor_list.append(NodeInfo(self.id, self.host, self.port))
         self.__stabilize_interval = settings.stabilize_interval
         self.__fix_fingers_interval = settings.fix_fingers_interval
+        self.__ping_successors_interval = settings.ping_successors_interval
         self.__stabilize_thread = threading.Thread(target=self.__stabilize)
         self.__fix_fingers_thread = threading.Thread(target=self.__fix_fingers)
+        self.__ping_successors_thread = threading.Thread(target=self.__ping_successors)
         self.__active = True
 
-    def handleCommands(self, peer_socket):
+    def handle_commands(self, peer_socket):
         while True:
             command = peer_socket.recv(1024).decode("utf-8").split()
             # print(f"{self.id}: Got command {command}")
@@ -78,6 +89,7 @@ class ChordNode(Node):
                     self.__active = False
                     self.__stabilize_thread.join()
                     self.__fix_fingers_thread.join()
+                    self.__ping_successors_thread.join()
                     self.__leave()
                     peer_socket.send("done".encode("utf-8"))
                     peer_socket.close()
@@ -98,7 +110,7 @@ class ChordNode(Node):
                     node = self.__closest_preceeding_finger(int(command[1]))
                     peer_socket.sendall(pickle.dumps(node))
                 case "get_your_successor":
-                    peer_socket.sendall(pickle.dumps(self.__get_successor()))
+                    peer_socket.sendall(pickle.dumps(self.__successor_list[0]))
                 case "get_your_predecessor":
                     peer_socket.sendall(pickle.dumps(self.__predecessor))
                 case "initialize_network":
@@ -115,6 +127,21 @@ class ChordNode(Node):
                     peer_socket.close()
                     # print(f"{self.id}: Closing socket")
                     return "continue"
+                case "store":
+                    peer_socket.send("send".encode("utf-8"))
+                    key = pickle.loads(peer_socket.recv(1024))
+                    peer_socket.send("send".encode("utf-8"))
+                    data = pickle.loads(peer_socket.recv(10240))
+                    peer_socket.send("close".encode("utf-8"))
+                    self.__store(key, data)
+                case "lookup":
+                    peer_socket.send("send".encode("utf-8"))
+                    key = pickle.loads(peer_socket.recv(1024))
+                    peer_socket.sendall(pickle.dumps(self.__lookup(key)))
+                    peer_socket.send("send".encode("utf-8"))
+                    data = pickle.loads(peer_socket.recv(10240))
+                    peer_socket.send("close".encode("utf-8"))
+                    self.__store(key, data)
                 # For debugging
                 case "get_self":
                     print(NodeInfo(self.id, self.host, self.port))
@@ -149,7 +176,7 @@ class ChordNode(Node):
                         f"get_your_successor {id}", n.host, n.port
                     )
                 else:
-                    successor = self.__get_successor()
+                    successor = self.__successor_list[0]
                 break
             except Exception:
                 n = self.__find_predecessor(id)
@@ -160,7 +187,7 @@ class ChordNode(Node):
     def __find_predecessor(self, id: int):
         # You are the predecessor
         if self.__circular_range(
-            id, self.id + 1, self.__get_successor().id + 1
+            id, self.id + 1, self.__successor_list[0].id + 1
         ):  # id not in (self.id, self.successor], [self.id+1, self.successor+1)
             return NodeInfo(self.id, self.host, self.port)
         # You are not the predecessor
@@ -185,7 +212,7 @@ class ChordNode(Node):
         return n
 
     def __closest_preceeding_finger(self, id: int):
-        for i in range(Node.hash_size - 1, -1, -1):
+        for i in range(P2PNode.hash_size - 1, -1, -1):
             if self.__circular_range(
                 self.__finger_table[i].node.id, self.id + 1, id
             ):  # node.id in (self.id, id), thus [self.id+1, id)
@@ -194,11 +221,12 @@ class ChordNode(Node):
 
     def __initialize_network(self):
         n = NodeInfo(self.id, self.host, self.port)
-        for i in range(0, Node.hash_size):
+        for i in range(0, P2PNode.hash_size):
             self.__finger_table[i].node = n
         self.__predecessor = n
         self.__stabilize_thread.start()
         self.__fix_fingers_thread.start()
+        self.__ping_successors_thread.start()
 
     def __join(self, inviter_host: str, inviter_port: int):
         self.__predecessor = NodeInfo(self.id, self.host, self.port)
@@ -210,6 +238,7 @@ class ChordNode(Node):
             )
             self.__stabilize_thread.start()
             self.__fix_fingers_thread.start()
+            self.__ping_successors_thread.start()
             # move values in (predecessor, n] from successor
         except Exception:
             print("The inviter node can't be accessed")
@@ -220,7 +249,7 @@ class ChordNode(Node):
             # print(f"{self.id}: Stabilize")
             while not exit_flag:
                 try:
-                    successor = self.__get_successor()
+                    successor = self.__successor_list[0]
                     if successor.id != self.id:
                         # print(f"{self.id}: Got out")
                         successors_predecessor = send_command_with_response(
@@ -263,9 +292,9 @@ class ChordNode(Node):
                 except Exception:
                     continue
             # print(
-            #    f"{e}: Node {self.id} accessing self.__successor_list[{i-1}], which is {self.__successor_list[i-1]}"
+            #    f"{e}: P2PNode {self.id} accessing self.__successor_list[{i-1}], which is {self.__successor_list[i-1]}"
             # )
-            # print(f"{e}: Node {self.id} finger_list:")
+            # print(f"{e}: P2PNode {self.id} finger_list:")
             # for entry in self.__successor_list:
             #    print(entry)
             # print(f"{e}: Successor was {successor}")
@@ -291,6 +320,7 @@ class ChordNode(Node):
             )
             time.sleep(self.__fix_fingers_interval)
 
+    """
     def __get_successor(self):
         print(f"{self.id}: Get successor:")
         for entry in self.__successor_list:
@@ -303,14 +333,25 @@ class ChordNode(Node):
                     continue
         # print("returns")
         return NodeInfo(self.id, self.host, self.port)
+    """
 
-    """
-    def __ping_successors(self):
-        for entry in self.__successor_list:
-            if entry.id != self.id
-                try:
-                    send_command("ping"
-    """
+    def __ping_successors(self):  # Remove nodes that left from successor list
+        while self.__active:
+            for i in range(len(self.__successor_list)):
+                if self.__successor_list[i].id != self.id:
+                    try:
+                        send_command(
+                            "ping",
+                            self.__successor_list[i].host,
+                            self.__successor_list[i].port,
+                        )
+                    except Exception:
+                        # print(f"{self.id}: Fixing finger {self.__successor_list[i]}")
+                        self.__successor_list.remove(self.__successor_list[i])
+                        self.__successor_list.append(
+                            NodeInfo(self.id, self.host, self.port)
+                        )
+            time.sleep(self.__ping_successors_interval)
 
     def __leave(self):
         # Send data to predecessor
@@ -332,3 +373,19 @@ class ChordNode(Node):
         else:
             # Range wraps around the maximum value
             return start <= value or value < end
+
+    def __store(self, key, data):
+        hashed_key = int(hashlib.md5(str(key).encode()).hexdigest(), 16)
+        if self.__circular_range(hashed_key, self.id + 1, self.__successor_list[0].id):
+            self.store_data(hashed_key, data)
+        else:
+            node = self.__find_predecessor(key)
+            send_store_command(node.host, node.port, key, data)
+
+    def __lookup(self, key):
+        hashed_key = int(hashlib.md5(str(key).encode()).hexdigest(), 16)
+        if self.__circular_range(hashed_key, self.id + 1, self.__successor_list[0].id):
+            self.get_data(hashed_key)
+        else:
+            node = self.__find_predecessor(key)
+            send_lookup_command(node.host, node.port, key)

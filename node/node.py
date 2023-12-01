@@ -5,7 +5,7 @@ import time
 
 
 # Abstract class to be inherited by CordNode and PastryNode classes
-class Node:
+class P2PNode:
     hash_size = 16 * 8
     hash_max_num = 2**hash_size
 
@@ -13,6 +13,7 @@ class Node:
         self.id = int(hashlib.md5((host + str(port)).encode()).hexdigest(), 16)
         self.host = host
         self.port = port
+        self.data = {}
 
     def start_node(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -23,13 +24,25 @@ class Node:
             try:
                 peer_socket, peer_addr = self.server_socket.accept()
                 peer_socket.settimeout(2.0)
-                result = self.handleCommands(peer_socket)
+                result = self.handle_commands(peer_socket)
                 if result == "close":
                     break
-            except Exception as e:
+            except Exception:
                 print("Timeout reached")
                 time.sleep(random.uniform(1.0, 3.0))
                 continue
 
-    def handleCommands(self, peer_socket):
+    def handle_commands(self, peer_socket):
         pass
+
+    def store_data(self, key, data):
+        if key in self.data.keys():
+            self.data[key].append(data)
+        else:
+            self.data[key] = [data]
+
+    def get_data(self, key):
+        if key in self.data.keys():
+            return self.data[key]
+        else:
+            return "Key Not Found"
