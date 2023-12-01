@@ -16,8 +16,8 @@ for institution, df_group in df.groupby(["Institution"]):
         people.append([row["Name"], row["Awards"]])
     data[institution[0]] = people  # type: ignore
 
-num_nodes = 3
-size_successor_list = 2
+num_nodes = 40
+size_successor_list = 5
 processes = []
 base_port = random.randint(8000, 10000)
 for i in range(num_nodes):
@@ -28,7 +28,7 @@ for i in range(num_nodes):
     )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()
-    time.sleep(1)
+    time.sleep(3)
     node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     node_socket.connect(("localhost", base_port + i))
     if i == 0:

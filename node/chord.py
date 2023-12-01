@@ -69,9 +69,8 @@ class ChordNode(Node):
 
     def handleCommands(self, peer_socket):
         while True:
-            # print(f"{self.id}: Now listening for commands")
             command = peer_socket.recv(1024).decode("utf-8").split()
-            # print(command)
+            # print(f"{self.id}: Got command {command}")
             match command[0]:
                 case "leave":
                     # Add communication to successor and __predecessor
@@ -109,7 +108,6 @@ class ChordNode(Node):
                     self.__join(command[1], int(command[2]))
                     peer_socket.send("done".encode("utf-8"))
                 case "notify":
-                    # print("Got command")
                     self.__notify(int(command[1]), str(command[2]), int(command[3]))
                     peer_socket.send("done".encode("utf-8"))
                 case "close":
@@ -144,13 +142,19 @@ class ChordNode(Node):
     def __find_successor(self, id: int):
         n = self.__find_predecessor(id)
         # If you are not the successor
-        if n.id != self.id:
-            successor = send_command_with_response(
-                f"get_your_successor {id}", n.host, n.port
-            )
+        while True:
+            try:
+                if n.id != self.id:
+                    successor = send_command_with_response(
+                        f"get_your_successor {id}", n.host, n.port
+                    )
+                else:
+                    successor = self.__get_successor()
+                break
+            except Exception:
+                n = self.__find_predecessor(id)
+                continue
         # If you are the successor
-        else:
-            successor = self.__get_successor()
         return successor
 
     def __find_predecessor(self, id: int):
@@ -163,16 +167,21 @@ class ChordNode(Node):
         n = self.__closest_preceeding_finger(id)
         if n.id != self.id:
             while True:
-                successor = send_command_with_response(
-                    "get_your_successor", n.host, n.port
-                )
-                if self.__circular_range(
-                    id, n.id + 1, successor.id + 1
-                ):  # id in (n.id, successor]
-                    break
-                n = send_command_with_response(
-                    f"closest_preceeding_finger {id}", n.host, n.port
-                )
+                try:
+                    successor = send_command_with_response(
+                        "get_your_successor", n.host, n.port
+                    )
+                    if self.__circular_range(
+                        id, n.id + 1, successor.id + 1
+                    ):  # id in (n.id, successor]
+                        break
+                    n = send_command_with_response(
+                        f"closest_preceeding_finger {id}", n.host, n.port
+                    )
+                except Exception:
+                    self.__remove_node_from_finger_table(n.id)
+                    n = self.__closest_preceeding_finger(id)
+                    continue
         return n
 
     def __closest_preceeding_finger(self, id: int):
@@ -193,62 +202,83 @@ class ChordNode(Node):
 
     def __join(self, inviter_host: str, inviter_port: int):
         self.__predecessor = NodeInfo(self.id, self.host, self.port)
-        self.__successor_list[0] = send_command_with_response(
-            f"find_successor {self.__finger_table[0].start}",
-            inviter_host,
-            inviter_port,
-        )
-        self.__stabilize_thread.start()
-        self.__fix_fingers_thread.start()
-        # move values in (predecessor, n] from successor
+        try:
+            self.__successor_list[0] = send_command_with_response(
+                f"find_successor {self.__finger_table[0].start}",
+                inviter_host,
+                inviter_port,
+            )
+            self.__stabilize_thread.start()
+            self.__fix_fingers_thread.start()
+            # move values in (predecessor, n] from successor
+        except Exception:
+            print("The inviter node can't be accessed")
 
     def __stabilize(self):
         while self.__active:
-            successor = self.__get_successor()
-            if successor.id != self.id:
-                # print(f"{self.id}: Got out")
-                successors_predecessor = send_command_with_response(
-                    "get_your_predecessor", successor.host, successor.port
-                )
-            else:
-                successors_predecessor = self.__predecessor
-            if self.__circular_range(
-                successors_predecessor.id, self.id + 1, successor.id
-            ):  # successors_predecessor not in (self.id, successor.id), thus [self.id+1, successor.id)
-                successor = successors_predecessor
-                self.__successor_list[0] = successor
-            for i in range(1, len(self.__successor_list)):
-                while True:
-                    try:
+            exit_flag = False
+            # print(f"{self.id}: Stabilize")
+            while not exit_flag:
+                try:
+                    successor = self.__get_successor()
+                    if successor.id != self.id:
+                        # print(f"{self.id}: Got out")
+                        successors_predecessor = send_command_with_response(
+                            "get_your_predecessor", successor.host, successor.port
+                        )
+                        # Edge case where successor's predecessor has left
+                        try:
+                            send_command(
+                                "ping",
+                                successors_predecessor.host,
+                                successors_predecessor.port,
+                            )
+                        except Exception:
+                            send_command(
+                                f"notify {self.id} {self.host} {self.port}",
+                                successor.host,
+                                successor.port,
+                            )
+                    else:
+                        successors_predecessor = self.__predecessor
+                    if self.__circular_range(
+                        successors_predecessor.id, self.id + 1, successor.id
+                    ):  # successors_predecessor not in (self.id, successor.id), thus [self.id+1, successor.id)
+                        successor = successors_predecessor
+
+                    self.__successor_list[0] = successor
+                    for i in range(1, len(self.__successor_list)):
                         self.__successor_list[i] = send_command_with_response(
                             "get_your_successor",
                             self.__successor_list[i - 1].host,
                             self.__successor_list[i - 1].port,
                         )
-                        break
-                    except Exception:
-                        continue
-                        # print(
-                        #    f"{e}: Node {self.id} accessing self.__successor_list[{i-1}], which is {self.__successor_list[i-1]}"
-                        # )
-                        # print(f"{e}: Node {self.id} finger_list:")
-                        # for entry in self.__successor_list:
-                        #    print(entry)
-                        # print(f"{e}: Successor was {successor}")
+                        exit_flag = True
+                    if self.id != successor.id:
+                        send_command(
+                            f"notify {self.id} {self.host} {self.port}",
+                            successor.host,
+                            successor.port,
+                        )
+                except Exception:
+                    continue
+            # print(
+            #    f"{e}: Node {self.id} accessing self.__successor_list[{i-1}], which is {self.__successor_list[i-1]}"
+            # )
+            # print(f"{e}: Node {self.id} finger_list:")
+            # for entry in self.__successor_list:
+            #    print(entry)
+            # print(f"{e}: Successor was {successor}")
 
-            if self.id != successor.id:
-                send_command(
-                    f"notify {self.id} {self.host} {self.port}",
-                    successor.host,
-                    successor.port,
-                )
             time.sleep(self.__stabilize_interval)
 
     def __notify(self, id: int, host: str, port: int):
+        # print(f"{self.id}: Got notify for {id}")
         if self.__circular_range(id, self.__predecessor.id, self.id):
             self.__predecessor = NodeInfo(id, host, port)
         else:
             try:
+                # print(f"Pinging predecessor {self.__predecessor.id}")
                 send_command("ping", self.__predecessor.host, self.__predecessor.port)
             except Exception:
                 self.__predecessor = NodeInfo(id, host, port)
@@ -262,18 +292,36 @@ class ChordNode(Node):
             time.sleep(self.__fix_fingers_interval)
 
     def __get_successor(self):
+        print(f"{self.id}: Get successor:")
         for entry in self.__successor_list:
+            # print("Stuck here?")
             if entry.id != self.id:
                 try:
                     send_command("ping", entry.host, entry.port)
                     return entry
                 except Exception:
-                    pass
+                    continue
+        # print("returns")
         return NodeInfo(self.id, self.host, self.port)
+
+    """
+    def __ping_successors(self):
+        for entry in self.__successor_list:
+            if entry.id != self.id
+                try:
+                    send_command("ping"
+    """
 
     def __leave(self):
         # Send data to predecessor
         pass
+
+    def __remove_node_from_finger_table(self, id):
+        for i in range(len(self.__finger_table)):
+            if self.__finger_table[i].node.id == id and i > 0:
+                self.__finger_table[i].node = self.__finger_table[i - 1].node
+            else:
+                self.__finger_table[i].node = NodeInfo(self.id, self.host, self.port)
 
     def __circular_range(self, value, start, end):
         if start < end:
