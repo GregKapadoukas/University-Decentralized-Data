@@ -1,6 +1,7 @@
 import hashlib
 import pickle
 import random
+import socket
 import threading
 import time
 
@@ -78,9 +79,9 @@ class ChordNode(P2PNode):
         self.__ping_successors_thread = threading.Thread(target=self.__ping_successors)
         self.__active = True
 
-    def handle_commands(self, peer_socket):
+    def handle_commands(self, peer_connection):
         while True:
-            command = peer_socket.recv(1024).decode("utf-8").split()
+            command = peer_connection.recv(1024).decode("utf-8").split()
             # print(f"{self.id}: Got command {command}")
             match command[0]:
                 case "leave":
@@ -91,80 +92,84 @@ class ChordNode(P2PNode):
                     self.__fix_fingers_thread.join()
                     self.__ping_successors_thread.join()
                     self.__leave()
-                    peer_socket.send("done".encode("utf-8"))
-                    peer_socket.close()
+                    peer_connection.send("done".encode("utf-8"))
+                    peer_connection.close()
                     return "close"
                 case "print":
                     print(command[1])
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case "ping":
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case "find_successor":
-                    peer_socket.send(
+                    peer_connection.send(
                         pickle.dumps(self.__find_successor(int(command[1])))
                     )
                 case "find_predecessor":
                     predecessor = self.__find_predecessor(int(command[1]))
-                    peer_socket.sendall(pickle.dumps(predecessor))
+                    peer_connection.sendall(pickle.dumps(predecessor))
                 case "closest_preceeding_finger":
                     node = self.__closest_preceeding_finger(int(command[1]))
-                    peer_socket.sendall(pickle.dumps(node))
+                    peer_connection.sendall(pickle.dumps(node))
                 case "get_your_successor":
-                    peer_socket.sendall(pickle.dumps(self.__successor_list[0]))
+                    peer_connection.sendall(pickle.dumps(self.__successor_list[0]))
                 case "get_your_predecessor":
-                    peer_socket.sendall(pickle.dumps(self.__predecessor))
+                    peer_connection.sendall(pickle.dumps(self.__predecessor))
                 case "initialize_network":
                     self.__initialize_network()
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case "join":
                     self.__join(command[1], int(command[2]))
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case "notify":
                     self.__notify(int(command[1]), str(command[2]), int(command[3]))
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case "close":
-                    peer_socket.send("close".encode("utf-8"))
-                    peer_socket.close()
+                    peer_connection.send("close".encode("utf-8"))
+                    peer_connection.close()
                     # print(f"{self.id}: Closing socket")
                     return "continue"
                 case "store":
-                    peer_socket.send("send".encode("utf-8"))
-                    key = pickle.loads(peer_socket.recv(1024))
-                    peer_socket.send("send".encode("utf-8"))
-                    data = pickle.loads(peer_socket.recv(10240))
-                    peer_socket.send("close".encode("utf-8"))
-                    self.__store(key, data)
+                    peer_connection.send("send".encode("utf-8"))
+                    chord_key = pickle.loads(peer_connection.recv(1024))
+                    peer_connection.send("send".encode("utf-8"))
+                    data_key = pickle.loads(peer_connection.recv(1024))
+                    peer_connection.send("send".encode("utf-8"))
+                    data = pickle.loads(peer_connection.recv(10240))
+                    peer_connection.send("close".encode("utf-8"))
+                    self.__store(chord_key, data_key, data)
                 case "lookup":
-                    peer_socket.send("send".encode("utf-8"))
-                    key = pickle.loads(peer_socket.recv(1024))
-                    peer_socket.sendall(pickle.dumps(self.__lookup(key)))
-                    peer_socket.send("send".encode("utf-8"))
-                    data = pickle.loads(peer_socket.recv(10240))
-                    peer_socket.send("close".encode("utf-8"))
-                    self.__store(key, data)
+                    peer_connection.send("send".encode("utf-8"))
+                    chord_key = pickle.loads(peer_connection.recv(1024))
+                    peer_connection.send("send".encode("utf-8"))
+                    data_key = pickle.loads(peer_connection.recv(1024))
+                    result = self.__lookup(chord_key, data_key)
+                    peer_connection.sendall(pickle.dumps(result))
+                case "propagate_lookup":
+                    self.__propagate_lookup(str(command[1]), str(command[2]), str(command[3]), int(command[4]))
+                    peer_connection.send("done".encode("utf-8"))
                 # For debugging
                 case "get_self":
                     print(NodeInfo(self.id, self.host, self.port))
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case "get_finger_table":
                     if len(command) > 1:
                         print(self.__finger_table[int(command[1])])
                     else:
                         for entry in self.__finger_table:
                             print(entry)
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case "get_successor_list":
                     if len(command) > 1:
                         print(self.__successor_list[int(command[1])])
                     else:
                         for entry in self.__successor_list:
                             print(entry)
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case "get_predecessor":
                     print(self.__predecessor)
-                    peer_socket.send("done".encode("utf-8"))
+                    peer_connection.send("done".encode("utf-8"))
                 case _:
-                    peer_socket.send("invalid".encode("utf-8"))
+                    peer_connection.send("invalid".encode("utf-8"))
 
     def __find_successor(self, id: int):
         n = self.__find_predecessor(id)
@@ -374,18 +379,46 @@ class ChordNode(P2PNode):
             # Range wraps around the maximum value
             return start <= value or value < end
 
-    def __store(self, key, data):
-        hashed_key = int(hashlib.md5(str(key).encode()).hexdigest(), 16)
-        if self.__circular_range(hashed_key, self.id + 1, self.__successor_list[0].id):
-            self.store_data(hashed_key, data)
+    def __store(self, chord_key, data_key, data):
+        if self.__circular_range(chord_key, self.id + 1, self.__successor_list[0].id):
+            self.store_data(data_key, data)
         else:
-            node = self.__find_predecessor(key)
-            send_store_command(node.host, node.port, key, data)
+            node = self.__find_predecessor(chord_key)
+            send_store_command(node.host, node.port, chord_key, data_key, data)
 
-    def __lookup(self, key):
-        hashed_key = int(hashlib.md5(str(key).encode()).hexdigest(), 16)
-        if self.__circular_range(hashed_key, self.id + 1, self.__successor_list[0].id):
-            self.get_data(hashed_key)
+    def __lookup(self, chord_key, data_key):
+        if self.__circular_range(chord_key, self.id + 1, self.__successor_list[0].id):
+            return self.get_data(data_key)
         else:
-            node = self.__find_predecessor(key)
-            send_lookup_command(node.host, node.port, key)
+            lookup_port = random.randint(10000, 12000)
+            lookup_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            lookup_socket.bind((self.host, lookup_port))
+            node = self.__find_predecessor(chord_key)
+            send_command(f"propagate_lookup {chord_key} {data_key} {self.host} {lookup_port}", node.host, node.port)
+            lookup_socket.listen(1)
+            while True:
+                try:
+                    lookup_connection, peer_addr = lookup_socket.accept()
+                    lookup_connection.settimeout(2.0)
+                    response = pickle.loads(lookup_connection.recv(10240))
+                    lookup_connection.send("done".encode("utf-8"))
+                    lookup_connection.close()
+                    return response
+                except Exception:
+                    print("Timeout reached")
+                    time.sleep(random.uniform(1.0, 3.0))
+                    continue
+
+    def __propagate_lookup(self, chord_key, data_key, asker_host, asker_port):
+        if self.__circular_range(chord_key, self.id + 1, self.__successor_list[0].id):
+            comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            comm_socket.settimeout(2.0)
+            comm_socket.connect((asker_host, asker_port))
+            comm_socket.send(
+                 pickle.dumps(self.get_data(data_key))
+            )
+            _ = comm_socket.recv(1024)
+            comm_socket.close()
+        else:
+            node = self.__find_predecessor(chord_key)
+            send_command(f"propagate_lookup {chord_key} {data_key} {asker_host} {asker_port}", node.host, node.port)

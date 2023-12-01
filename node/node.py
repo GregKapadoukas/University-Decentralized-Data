@@ -22,9 +22,9 @@ class P2PNode:
         print(f"Node {self.id} listening on {self.host}:{self.port}")
         while True:
             try:
-                peer_socket, peer_addr = self.server_socket.accept()
-                peer_socket.settimeout(2.0)
-                result = self.handle_commands(peer_socket)
+                peer_connection, peer_addr = self.server_socket.accept()
+                peer_connection.settimeout(2.0)
+                result = self.handle_commands(peer_connection)
                 if result == "close":
                     break
             except Exception:
@@ -32,7 +32,7 @@ class P2PNode:
                 time.sleep(random.uniform(1.0, 3.0))
                 continue
 
-    def handle_commands(self, peer_socket):
+    def handle_commands(self, peer_connection):
         pass
 
     def store_data(self, key, data):

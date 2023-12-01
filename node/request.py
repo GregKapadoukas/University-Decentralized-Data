@@ -40,16 +40,34 @@ def send_command_with_response(command: str, host: str, port: int):
     return response
 
 
-def send_store_command(host: str, port: int, key: str, data):
+def send_store_command(host: str, port: int, chord_key: int, data_key: str, data):
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     comm_socket.settimeout(5.0)
     comm_socket.connect((host, port))
     comm_socket.send("store".encode("utf-8"))
     _ = comm_socket.recv(1024)
-    comm_socket.sendall(pickle.dumps(key))
+    comm_socket.sendall(pickle.dumps(chord_key))
+    _ = comm_socket.recv(1024)
+    comm_socket.sendall(pickle.dumps(data_key))
     _ = comm_socket.recv(1024)
     comm_socket.sendall(pickle.dumps(data))
     _ = comm_socket.recv(1024)
     comm_socket.sendall("close".encode("utf-8"))
     _ = comm_socket.recv(1024)
     comm_socket.close()
+
+
+def send_lookup_command(host: str, port: int, chord_key: int, data_key: str):
+    comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    comm_socket.settimeout(5.0)
+    comm_socket.connect((host, port))
+    comm_socket.send("lookup".encode("utf-8"))
+    _ = comm_socket.recv(1024)
+    comm_socket.sendall(pickle.dumps(chord_key))
+    _ = comm_socket.recv(1024)
+    comm_socket.sendall(pickle.dumps(data_key))
+    result = pickle.loads(comm_socket.recv(10240))
+    comm_socket.sendall("close".encode("utf-8"))
+    _ = comm_socket.recv(1024)
+    comm_socket.close()
+    return result

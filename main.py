@@ -1,3 +1,4 @@
+import hashlib
 import multiprocessing
 import random
 import socket
@@ -6,7 +7,7 @@ import time
 import pandas as pd
 
 from node.chord import ChordNode, ChordNodeSettings
-from node.request import send_command
+from node.request import send_command, send_lookup_command, send_store_command
 
 df = pd.read_csv("dataset/list_of_computer_scientists.csv")
 data = {}
@@ -43,6 +44,7 @@ for i in range(num_nodes):
 
 # Placeholder from now on
 # Test communication with nodes
+"""
 print('Enter command in the following format "node_host" node_port" "command"')
 while True:
     msg = input("# ")
@@ -56,3 +58,24 @@ while True:
         send_command(str(msg[2]), str(msg[0]), int(msg[1]))
     else:
         print("Invalid Command")
+"""
+send_store_command(
+    "localhost",
+    base_port,
+    int(hashlib.md5(("CEID").encode()).hexdigest(), 16),
+    "15",
+    "Test 1",
+)
+
+send_store_command(
+    "localhost",
+    base_port,
+    int(hashlib.md5(("CEID").encode()).hexdigest(), 16),
+    "15",
+    "Test 2",
+)
+
+result = send_lookup_command(
+    "localhost", base_port, int(hashlib.md5(("CEID").encode()).hexdigest(), 16), "15"
+)
+print(f"Result for Institution: CEID and #Awards: 15 is: {result}")
