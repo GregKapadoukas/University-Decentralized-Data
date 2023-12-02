@@ -7,7 +7,8 @@ import time
 
 from node.node import P2PNode
 from node.request import (send_command, send_command_async,
-                          send_command_with_response, send_store_command)
+                          send_command_with_response, send_store_command,
+                          send_transfer_receive_command)
 
 
 class ChordNodeSettings:
@@ -82,7 +83,6 @@ class ChordNode(P2PNode):
     def handle_commands(self, peer_connection):
         while True:
             command = peer_connection.recv(1024).decode("utf-8").split()
-            # print(f"{self.id}: Got command {command}")
             match command[0]:
                 case "leave":
                     # Add communication to successor and __predecessor
@@ -126,7 +126,6 @@ class ChordNode(P2PNode):
                 case "close":
                     peer_connection.send("close".encode("utf-8"))
                     peer_connection.close()
-                    # print(f"{self.id}: Closing socket")
                     return "continue"
                 case "store":
                     peer_connection.send("send".encode("utf-8"))
@@ -135,8 +134,17 @@ class ChordNode(P2PNode):
                     data_key = pickle.loads(peer_connection.recv(1024))
                     peer_connection.send("send".encode("utf-8"))
                     data = pickle.loads(peer_connection.recv(10240))
-                    peer_connection.send("close".encode("utf-8"))
                     self.__store(chord_key, data_key, data)
+                    peer_connection.send("close".encode("utf-8"))
+                case "transfer_receive":
+                    peer_connection.send("send".encode("utf-8"))
+                    chord_key = pickle.loads(peer_connection.recv(1024))
+                    peer_connection.send("send".encode("utf-8"))
+                    data_key = pickle.loads(peer_connection.recv(1024))
+                    peer_connection.send("send".encode("utf-8"))
+                    data = pickle.loads(peer_connection.recv(10240))
+                    self.__transfer_receive(chord_key, data_key, data)
+                    peer_connection.send("close".encode("utf-8"))
                 case "lookup":
                     peer_connection.send("send".encode("utf-8"))
                     chord_key = pickle.loads(peer_connection.recv(1024))
@@ -247,19 +255,16 @@ class ChordNode(P2PNode):
             self.__stabilize_thread.start()
             self.__fix_fingers_thread.start()
             self.__ping_successors_thread.start()
-            # move values in (predecessor, n] from successor
         except Exception:
             print("The inviter node can't be accessed")
 
     def __stabilize(self):
         while self.__active:
             exit_flag = False
-            # print(f"{self.id}: Stabilize")
             while not exit_flag:
                 try:
                     successor = self.__successor_list[0]
                     if successor.id != self.id:
-                        # print(f"{self.id}: Got out")
                         successors_predecessor = send_command_with_response(
                             "get_your_predecessor", successor.host, successor.port
                         )
@@ -284,6 +289,16 @@ class ChordNode(P2PNode):
                         successor = successors_predecessor
 
                     self.__successor_list[0] = successor
+                    #Potentially transfer keys to successor (will happen when new node has joined)
+                    if self.id != self.__successor_list[0].id:
+                        deleted_keys = []
+                        for chord_key in self.data.keys():
+                            if not self.__circular_range(chord_key, self.id, self.__successor_list[0].id):
+                                self.__transfer_keys(self.__successor_list[0], chord_key, self.data[chord_key])
+                                deleted_keys.append(chord_key)
+                        for key in deleted_keys:
+                            del self.data[key]
+
                     for i in range(1, len(self.__successor_list)):
                         self.__successor_list[i] = send_command_with_response(
                             "get_your_successor",
@@ -299,23 +314,23 @@ class ChordNode(P2PNode):
                         )
                 except Exception:
                     continue
-            # print(
-            #    f"{e}: P2PNode {self.id} accessing self.__successor_list[{i-1}], which is {self.__successor_list[i-1]}"
-            # )
-            # print(f"{e}: P2PNode {self.id} finger_list:")
-            # for entry in self.__successor_list:
-            #    print(entry)
-            # print(f"{e}: Successor was {successor}")
-
             time.sleep(self.__stabilize_interval)
 
     def __notify(self, id: int, host: str, port: int):
-        # print(f"{self.id}: Got notify for {id}")
         if self.__circular_range(id, self.__predecessor.id, self.id):
             self.__predecessor = NodeInfo(id, host, port)
+            #Potentially transfer keys to predecessor (will happen when new node has joined)
+            if self.id != self.__predecessor.id:
+                deleted_keys = []
+                for chord_key in self.data.keys():
+                    if self.__circular_range(chord_key, self.__predecessor.id, self.id):
+                        self.__transfer_keys(self.__predecessor, chord_key, self.data[chord_key])
+                        deleted_keys.append(chord_key)
+                for key in deleted_keys:
+                    del self.data[key]
         else:
+            #Check if your old predecessor is still online, if not replace
             try:
-                # print(f"Pinging predecessor {self.__predecessor.id}")
                 send_command("ping", self.__predecessor.host, self.__predecessor.port)
             except Exception:
                 self.__predecessor = NodeInfo(id, host, port)
@@ -328,21 +343,6 @@ class ChordNode(P2PNode):
             )
             time.sleep(self.__fix_fingers_interval)
 
-    """
-    def __get_successor(self):
-        print(f"{self.id}: Get successor:")
-        for entry in self.__successor_list:
-            # print("Stuck here?")
-            if entry.id != self.id:
-                try:
-                    send_command("ping", entry.host, entry.port)
-                    return entry
-                except Exception:
-                    continue
-        # print("returns")
-        return NodeInfo(self.id, self.host, self.port)
-    """
-
     def __ping_successors(self):  # Remove nodes that left from successor list
         while self.__active:
             for i in range(len(self.__successor_list)):
@@ -354,7 +354,6 @@ class ChordNode(P2PNode):
                             self.__successor_list[i].port,
                         )
                     except Exception:
-                        # print(f"{self.id}: Fixing finger {self.__successor_list[i]}")
                         self.__successor_list.remove(self.__successor_list[i])
                         self.__successor_list.append(
                             NodeInfo(self.id, self.host, self.port)
@@ -363,7 +362,11 @@ class ChordNode(P2PNode):
 
     def __leave(self):
         # Send data to predecessor
-        pass
+        for chord_key in self.data.keys():
+            while True:
+                if self.id != self.__predecessor.id:
+                    self.__transfer_keys(self.__predecessor, chord_key, self.data[chord_key])
+                    break
 
     def __remove_node_from_finger_table(self, id):
         for i in range(len(self.__finger_table)):
@@ -395,13 +398,11 @@ class ChordNode(P2PNode):
                     continue
 
     def __lookup(self, chord_key, data_key):
-        #print(f"Self ID: {self.id}, Successor ID: {self.__successor_list[0].id}, Data key: {chord_key}")
         if self.__circular_range(chord_key, self.id + 1, self.__successor_list[0].id):
             return self.get_data(chord_key, data_key)
         else:
             lookup_port = random.randint(10000, 12000)
             lookup_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            #print(f"Lookup port: {lookup_port}")
             lookup_socket.bind((self.host, lookup_port))
             while True:
                 try:
@@ -437,3 +438,18 @@ class ChordNode(P2PNode):
                     break
                 except Exception:
                     continue
+
+    def __transfer_keys(self, destination_node, chord_key, data):
+        for data_key in data.keys():
+            for entry in data[data_key]:
+                while True:
+                    try:
+                        send_transfer_receive_command(destination_node.host, destination_node.port, chord_key, data_key, entry)
+                        break
+                    except Exception:
+                        continue
+
+
+    # Store but will always store on node, not propagate, useful for leave where node transfers keys but hasn't left yet
+    def __transfer_receive(self, chord_key, data_key, data):
+        self.store_data(chord_key, data_key, data)

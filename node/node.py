@@ -35,9 +35,9 @@ class P2PNode:
             if data_key in self.data[chord_key].keys():
                 self.data[chord_key][data_key].append(data)
             else:
-                self.data[chord_key] = {data_key: [data]}
+                self.data[chord_key][data_key] = [data]
         else:
-            self.data = {chord_key: {data_key: [data]}}
+            self.data[chord_key] = {data_key: [data]}
 
     def get_data(self, chord_key, data_key):
         if chord_key in self.data.keys() and data_key in self.data[chord_key].keys():

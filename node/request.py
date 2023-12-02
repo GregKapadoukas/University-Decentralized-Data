@@ -66,6 +66,25 @@ def send_store_command(host: str, port: int, chord_key: int, data_key: str, data
     comm_socket.close()
 
 
+def send_transfer_receive_command(
+    host: str, port: int, chord_key: int, data_key: str, data
+):
+    comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    comm_socket.settimeout(5.0)
+    comm_socket.connect((host, port))
+    comm_socket.send("transfer_receive".encode("utf-8"))
+    _ = comm_socket.recv(1024)
+    comm_socket.sendall(pickle.dumps(chord_key))
+    _ = comm_socket.recv(1024)
+    comm_socket.sendall(pickle.dumps(data_key))
+    _ = comm_socket.recv(1024)
+    comm_socket.sendall(pickle.dumps(data))
+    _ = comm_socket.recv(1024)
+    comm_socket.sendall("close".encode("utf-8"))
+    _ = comm_socket.recv(1024)
+    comm_socket.close()
+
+
 def send_lookup_command(host: str, port: int, chord_key: int, data_key: str):
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     comm_socket.settimeout(15.0)
