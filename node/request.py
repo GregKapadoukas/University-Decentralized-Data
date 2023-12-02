@@ -50,6 +50,8 @@ def send_command_with_response(command: str, host: str, port: int):
 
 
 def send_store_command(host: str, port: int, chord_key: int, data_key: str, data):
+    if data_key != "nan":
+        data_key = str(float(data_key))
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     comm_socket.settimeout(5.0)
     comm_socket.connect((host, port))
@@ -86,6 +88,8 @@ def send_transfer_receive_command(
 
 
 def send_lookup_command(host: str, port: int, chord_key: int, data_key: str):
+    if data_key != "nan":
+        data_key = str(float(data_key))
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     comm_socket.settimeout(15.0)
     comm_socket.connect((host, port))

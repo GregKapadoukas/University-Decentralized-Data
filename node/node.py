@@ -43,4 +43,4 @@ class P2PNode:
         if chord_key in self.data.keys() and data_key in self.data[chord_key].keys():
             return self.data[chord_key][data_key]
         else:
-            return "Not Found"
+            return ["Not Found"]
