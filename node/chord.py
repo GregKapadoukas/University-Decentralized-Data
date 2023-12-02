@@ -6,8 +6,8 @@ import threading
 import time
 
 from node.node import P2PNode
-from node.request import (send_command, send_command_with_response,
-                          send_store_command)
+from node.request import (send_command, send_command_async,
+                          send_command_with_response, send_store_command)
 
 
 class ChordNodeSettings:
@@ -142,11 +142,14 @@ class ChordNode(P2PNode):
                     chord_key = pickle.loads(peer_connection.recv(1024))
                     peer_connection.send("send".encode("utf-8"))
                     data_key = pickle.loads(peer_connection.recv(1024))
-                    result = self.__lookup(chord_key, data_key)
+                    peer_connection.send("send".encode("utf-8"))
+                    result = self.__lookup(int(chord_key), str(data_key))
                     peer_connection.sendall(pickle.dumps(result))
                 case "propagate_lookup":
-                    self.__propagate_lookup(str(command[1]), str(command[2]), str(command[3]), int(command[4]))
                     peer_connection.send("done".encode("utf-8"))
+                    self.__propagate_lookup(int(command[1]), str(command[2]), str(command[3]), int(command[4]))
+                    peer_connection.close()
+                    return "continue"
                 # For debugging
                 case "get_self":
                     print(NodeInfo(self.id, self.host, self.port))
@@ -381,44 +384,56 @@ class ChordNode(P2PNode):
 
     def __store(self, chord_key, data_key, data):
         if self.__circular_range(chord_key, self.id + 1, self.__successor_list[0].id):
-            self.store_data(data_key, data)
+            self.store_data(chord_key, data_key, data)
         else:
-            node = self.__find_predecessor(chord_key)
-            send_store_command(node.host, node.port, chord_key, data_key, data)
+            while True:
+                try:
+                    node = self.__find_predecessor(chord_key)
+                    send_store_command(node.host, node.port, chord_key, data_key, data)
+                    break
+                except Exception:
+                    continue
 
     def __lookup(self, chord_key, data_key):
+        #print(f"Self ID: {self.id}, Successor ID: {self.__successor_list[0].id}, Data key: {chord_key}")
         if self.__circular_range(chord_key, self.id + 1, self.__successor_list[0].id):
-            return self.get_data(data_key)
+            return self.get_data(chord_key, data_key)
         else:
             lookup_port = random.randint(10000, 12000)
             lookup_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            #print(f"Lookup port: {lookup_port}")
             lookup_socket.bind((self.host, lookup_port))
-            node = self.__find_predecessor(chord_key)
-            send_command(f"propagate_lookup {chord_key} {data_key} {self.host} {lookup_port}", node.host, node.port)
-            lookup_socket.listen(1)
             while True:
                 try:
-                    lookup_connection, peer_addr = lookup_socket.accept()
-                    lookup_connection.settimeout(2.0)
-                    response = pickle.loads(lookup_connection.recv(10240))
-                    lookup_connection.send("done".encode("utf-8"))
-                    lookup_connection.close()
-                    return response
+                    node = self.__find_predecessor(chord_key)
+                    send_command_async(f"propagate_lookup {chord_key} {data_key} {self.host} {lookup_port}", node.host, node.port)
+                    break
                 except Exception:
-                    print("Timeout reached")
-                    time.sleep(random.uniform(1.0, 3.0))
                     continue
+            lookup_socket.listen(5)
+            lookup_connection, peer_addr = lookup_socket.accept()
+            lookup_connection.settimeout(10.0)
+            response = pickle.loads(lookup_connection.recv(10240))
+            lookup_connection.send("done".encode("utf-8"))
+            lookup_connection.close()
+            return response
 
     def __propagate_lookup(self, chord_key, data_key, asker_host, asker_port):
+        time.sleep(2) #Make sure that asker is ready to get response
         if self.__circular_range(chord_key, self.id + 1, self.__successor_list[0].id):
             comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            comm_socket.settimeout(2.0)
+            comm_socket.settimeout(5.0)
             comm_socket.connect((asker_host, asker_port))
             comm_socket.send(
-                 pickle.dumps(self.get_data(data_key))
+                 pickle.dumps(self.get_data(chord_key, data_key))
             )
             _ = comm_socket.recv(1024)
             comm_socket.close()
         else:
-            node = self.__find_predecessor(chord_key)
-            send_command(f"propagate_lookup {chord_key} {data_key} {asker_host} {asker_port}", node.host, node.port)
+            while True:
+                try:
+                    node = self.__find_predecessor(chord_key)
+                    send_command(f"propagate_lookup {chord_key} {data_key} {asker_host} {asker_port}", node.host, node.port)
+                    break
+                except Exception:
+                    continue

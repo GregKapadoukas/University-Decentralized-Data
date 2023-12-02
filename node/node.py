@@ -21,28 +21,26 @@ class P2PNode:
         self.server_socket.listen(5)
         print(f"Node {self.id} listening on {self.host}:{self.port}")
         while True:
-            try:
-                peer_connection, peer_addr = self.server_socket.accept()
-                peer_connection.settimeout(2.0)
-                result = self.handle_commands(peer_connection)
-                if result == "close":
-                    break
-            except Exception:
-                print("Timeout reached")
-                time.sleep(random.uniform(1.0, 3.0))
-                continue
+            peer_connection, peer_addr = self.server_socket.accept()
+            peer_connection.settimeout(10.0)
+            result = self.handle_commands(peer_connection)
+            if result == "close":
+                break
 
     def handle_commands(self, peer_connection):
         pass
 
-    def store_data(self, key, data):
-        if key in self.data.keys():
-            self.data[key].append(data)
+    def store_data(self, chord_key, data_key, data):
+        if chord_key in self.data.keys():
+            if data_key in self.data[chord_key].keys():
+                self.data[chord_key][data_key].append(data)
+            else:
+                self.data[chord_key] = {data_key: [data]}
         else:
-            self.data[key] = [data]
+            self.data = {chord_key: {data_key: [data]}}
 
-    def get_data(self, key):
-        if key in self.data.keys():
-            return self.data[key]
+    def get_data(self, chord_key, data_key):
+        if chord_key in self.data.keys() and data_key in self.data[chord_key].keys():
+            return self.data[chord_key][data_key]
         else:
-            return "Key Not Found"
+            return "Not Found"

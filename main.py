@@ -17,7 +17,7 @@ for institution, df_group in df.groupby(["Institution"]):
         people.append([row["Name"], row["Awards"]])
     data[institution[0]] = people  # type: ignore
 
-num_nodes = 40
+num_nodes = 5
 size_successor_list = 5
 processes = []
 base_port = random.randint(8000, 10000)
@@ -25,7 +25,7 @@ for i in range(num_nodes):
     node = ChordNode(
         host="localhost",
         port=base_port + i,
-        settings=ChordNodeSettings(size_successor_list, 3, 0.05, 0.05),
+        settings=ChordNodeSettings(size_successor_list, 1, 0.05, 0.05),
     )
     processes.append(multiprocessing.Process(target=node.start_node))
     processes[-1].start()
@@ -44,7 +44,37 @@ for i in range(num_nodes):
 
 # Placeholder from now on
 # Test communication with nodes
-"""
+print("Waiting for nodes to synchronize")
+time.sleep(5)
+
+print(
+    f"Storing first entry with hash {int(hashlib.md5(('CEID').encode()).hexdigest(), 16)}"
+)
+send_store_command(
+    "localhost",
+    base_port,
+    int(hashlib.md5(("CEID").encode()).hexdigest(), 16),
+    "15",
+    "Gregory Kapadoukas",
+)
+
+print(
+    f"Storing second entry with hash {int(hashlib.md5(('CEID').encode()).hexdigest(), 16)}"
+)
+send_store_command(
+    "localhost",
+    base_port,
+    int(hashlib.md5(("CEID").encode()).hexdigest(), 16),
+    "15",
+    "Kostas Kapogiannis",
+)
+
+result = send_lookup_command(
+    "localhost", base_port, int(hashlib.md5(("CEID").encode()).hexdigest(), 16), "15"
+)
+print(f"Result for Institution: CEID and #Awards: 15 is: {result}")
+
+# Console
 print('Enter command in the following format "node_host" node_port" "command"')
 while True:
     msg = input("# ")
@@ -58,24 +88,3 @@ while True:
         send_command(str(msg[2]), str(msg[0]), int(msg[1]))
     else:
         print("Invalid Command")
-"""
-send_store_command(
-    "localhost",
-    base_port,
-    int(hashlib.md5(("CEID").encode()).hexdigest(), 16),
-    "15",
-    "Test 1",
-)
-
-send_store_command(
-    "localhost",
-    base_port,
-    int(hashlib.md5(("CEID").encode()).hexdigest(), 16),
-    "15",
-    "Test 2",
-)
-
-result = send_lookup_command(
-    "localhost", base_port, int(hashlib.md5(("CEID").encode()).hexdigest(), 16), "15"
-)
-print(f"Result for Institution: CEID and #Awards: 15 is: {result}")
