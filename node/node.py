@@ -19,7 +19,7 @@ class P2PNode:
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind((self.host, self.port))
         self.server_socket.listen(5)
-        print(f"Node {self.id} listening on {self.host}:{self.port}")
+        print(f"Node {self.id} listening on {self.host}:{self.port}", flush=True)
         while True:
             peer_connection, peer_addr = self.server_socket.accept()
             peer_connection.settimeout(10.0)

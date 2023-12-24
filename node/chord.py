@@ -355,6 +355,8 @@ class ChordNode(P2PNode):
                 send_command("ping", self.__predecessor.host, self.__predecessor.port)
             except Exception:
                 self.__predecessor = NodeInfo(id, host, port)
+                #print("Updated predecessor, because the previous one left")
+        #print(f"{self.host}:{self.port}: Finished notify from {host}:{port}", flush=True)
 
     def __fix_fingers(self):
         while self.__active:
