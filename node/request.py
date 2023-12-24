@@ -5,24 +5,19 @@ import time
 
 
 def send_command(command: str, host: str, port: int):
-    # print(f"Command: {command}, Host: {host}, Port {port}")
-    # print(f"Command: {command}, Host: {host}, Port {port}")
+    # print(f"{host}:{port}: Sending message", flush=True)
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     comm_socket.settimeout(2.0)
     comm_socket.connect((host, port))
-    # print("are we deadlocked")
     comm_socket.send(command.encode("utf-8"))
     _ = comm_socket.recv(1024)
-    # print("no")
-    # print("are we deadlocked")
     comm_socket.send("close".encode("utf-8"))
     _ = comm_socket.recv(1024)
-    # print("no")
-    # print(f"Exit Command: {command}, Host: {host}, Port {port}")
     comm_socket.close()
 
 
 def send_command_async(command: str, host: str, port: int):
+    # print(f"{host}:{port}: Sending message", flush=True)
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     comm_socket.settimeout(2.0)
     comm_socket.connect((host, port))
@@ -32,24 +27,20 @@ def send_command_async(command: str, host: str, port: int):
 
 
 def send_command_with_response(command: str, host: str, port: int):
-    # print(f"Command: {command}, Host: {host}, Port {port}")
+    # print(f"{host}:{port}: Sending message", flush=True)
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     comm_socket.settimeout(5.0)
     comm_socket.connect((host, port))
-    # print("are we deadlocked")
     comm_socket.send(command.encode("utf-8"))
     response = pickle.loads(comm_socket.recv(1024))
-    # print("no")
-    # print("are we deadlocked")
     comm_socket.send("close".encode("utf-8"))
     _ = comm_socket.recv(1024)
-    # print("no")
     comm_socket.close()
-    # print(f"Exit Command: {command}, Host: {host}, Port {port}")
     return response
 
 
 def send_store_command(host: str, port: int, chord_key: int, data_key: str, data):
+    # print(f"{host}:{port}: Sending message", flush=True)
     if data_key != "nan":
         data_key = str(float(data_key))
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -71,6 +62,7 @@ def send_store_command(host: str, port: int, chord_key: int, data_key: str, data
 def send_transfer_receive_command(
     host: str, port: int, chord_key: int, data_key: str, data
 ):
+    # print(f"{host}:{port}: Sending message", flush=True)
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     comm_socket.settimeout(5.0)
     comm_socket.connect((host, port))
@@ -88,6 +80,7 @@ def send_transfer_receive_command(
 
 
 def send_lookup_command(host: str, port: int, chord_key: int, data_key: str):
+    # print(f"{host}:{port}: Sending message", flush=True)
     if data_key != "nan":
         data_key = str(float(data_key))
     comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
