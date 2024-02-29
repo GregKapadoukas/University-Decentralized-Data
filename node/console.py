@@ -17,9 +17,9 @@ def console(processes, exit_flag):
         'For lookups: "node_host" "node_port" "lookup" "Institution Name" "Number of Awards"'
     )
     print(
-        'For storing: "node_host" "node_port" "lookup" "Institution Name" "Number of Awards" "Name of Computer Scientist"'
+        'For storing: "node_host" "node_port" "store" "Institution Name" "Number of Awards" "Name of Computer Scientist"'
     )
-    print('For others: "node_host" "node_port" "lookup" "command"')
+    print('For others: "node_host" "node_port" "command"')
     print('To exit type "exit"')
     print('Example command: "localhost 8080 lookup MIT 15"')
     while True:
